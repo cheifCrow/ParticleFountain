@@ -6,14 +6,13 @@
 #include <GL/gl.h>
 #endif
 
-#define PI 3.14159265
-
 #include <iostream>
 
 #include <time.h>
 #include <sys/time.h>
 
 #include <math.h>
+#define PI 3.14159265
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -32,34 +31,25 @@
 
 using namespace std;
 
-time_t begTime = 0;
-struct timeval start, update, tfrozen, thawed;
-float frames = 0;
-float sleeptime = 0;
-double mod = 0;
-long sec = 0;
-long usec = 0;
+struct timeval point, current, tfrozen, thawed, instant;
 double pTime = 0;
-double camerahRadius = 170;
+double cameraRadius = 170;
 double Ex = 0;
 double Ey = 50;
-double Ez = camerahRadius;
-bool fRun = true;
+double Ez = cameraRadius;
+double Mx = 0;
+double Mz = 1;
 bool friction = true;
 bool paused = false;
 bool frozen = false;
-int numP = 0;
-float cspacing = 0.0001;
-float tspacing = 0;
+float tspacing = 0.02;
 float pauseOffset = 0;
-int rotation = 0;
-float cangle = 45; //the angle of the cannon
-float clength = 60; //the length of the cannon shaft
-float cradius = 20; //the radius of the cannon barrel
-vector<int> tokill;
+float p = 0;
+int cameraRotation = 0;
 renderstate rstate = fountain;
 camerastate cstate = out;
 
+//This function will return the difference in seconds with millisecond precision between points in time
 double preciseDiff(struct timeval & t1, struct timeval & t2)
 {
     long sec = t1.tv_sec - t2.tv_sec;
@@ -68,89 +58,12 @@ double preciseDiff(struct timeval & t1, struct timeval & t2)
     return((((sec) * 1000 + usec/1000.0) + 0.5)/1000);
 }
 
+//Since the all the trig functions take radians, but it is far easier to think in terms of angles,
+//this function will return the radian of any angle
 float toRadians(float angle)
 {
     return (angle*PI/180);
 }
-
-class Cuboid{
-public:
-    float getX()
-    {
-        return x;
-    }
-    float getY()
-    {
-        return y;
-    }
-    float getZ()
-    {
-        return z;
-    }
-    float getLength()
-    {
-        return length;
-    }
-    float getHeight()
-    {
-        return height;
-    }
-    float getWidth()
-    {
-        return width;
-    }
-    void draw()
-    {
-        glPushMatrix();
-        glBegin(GL_QUADS);
-        glColor3f(1, 0, 0);
-        
-        glVertex3f(x, y, z);
-        glVertex3f(x+length, y, z);
-        glVertex3f(x+length, y+height, z);
-        glVertex3f(x, y+height, z);
-        
-        glVertex3f(x+length, y, z);
-        glVertex3f(x+length, y, z-width);
-        glVertex3f(x+length, y+height, z-width);
-        glVertex3f(x+length, y+height, z);
-        
-        glVertex3f(x+length, y, z-width);
-        glVertex3f(x, y, z-width);
-        glVertex3f(x, y+height, z-width);
-        glVertex3f(x+length, y+height, z-width);
-        
-        glVertex3f(x, y, z);
-        glVertex3f(x, y+height, z);
-        glVertex3f(x, y+height, z-width);
-        glVertex3f(x, y, z-width);
-        
-        glVertex3f(x, y+height, z);
-        glVertex3f(x+length, y+height, z);
-        glVertex3f(x+length, y+height, z-width);
-        glVertex3f(x, y+height, z-width);
-        
-        glVertex3f(x, y, z);
-        glVertex3f(x+length, y, z);
-        glVertex3f(x+length, y, z-width);
-        glVertex3f(x, y, z-width);
-        glEnd();
-        glPopMatrix();
-    }
-    Cuboid(float _x, float _y, float _z, float _length, float _height, float _width)
-    {
-        x = _x;
-        y = _y;
-        z = _z;
-        width = _width;
-        height = _height;
-        length = _length;
-    }
-private:
-    float x, y, z, length, height, width;
-};
-
-Cuboid object = Cuboid(5, 0, -10, 20, 20, 20);
 
 class Cannon{
 public:
@@ -251,41 +164,73 @@ Cannon c = Cannon(-50, 0, 0, 8, 30, 5, 45);
 
 class Particle{
 public:
-    void setTOffset(float _t)
+    float getX()
     {
-        tOffset += _t;
-        t2Offset += _t;
-        t3Offset += _t;
-        t4Offset += _t;
-        if(marked && fade > 0)
-            dOffset += _t;
+        return x;
+    }
+    float getY()
+    {
+        return y;
+    }
+    float getZ()
+    {
+        return z;
     }
     bool getDeath()
     {
-        if(fade <= 0 && marked == true)
-            return(true);
+        if(marked && fade<=0)
+            return true;
         else
-            return(false);
+            return false;
     }
+    void setTimeOffset(float _offset)
+    {
+        timeOffset += _offset;
+    }
+    
+    void applyForces()
+    {
+        if(friction && (rstate==fountain || rstate==cannon))
+            f = 0.75;
+        else if(friction && rstate==rain)
+            f = 0.25;
+        else
+            f = 1;
+        
+        d  = preciseDiff(current, previous) - timeOffset;
+        
+        rotationAngle+=rotationSpeed*d;
+        
+        yspeed+=(gravity*d);
+        
+        x+=(xspeed*d);
+        y+=(yspeed*d);
+        z+=(zspeed*d);
+        
+        if(y<=radius && yspeed<0 && (x<50 && x>-50) && (z<50 && z>-50))
+        {
+            yspeed = -yspeed*f;
+            y = radius;
+        }
+        timeOffset = 0;
+        previous = current;
+        lived += d;
+        checkLifeTime();
+        if(marked && fade>=0)
+        {
+            fade = 1-(lived-lifespan);
+            if(fade<0)
+                fade = 0;
+        }
+    }
+    
     void draw()
     {
-        if(!paused)
-        {
-            checkLifeTime();
-            applyforces();
-            if(marked == true && fade > 0)
-            {
-                gettimeofday(&current, NULL);
-                d = preciseDiff(current, death) - dOffset;
-                fade = 1-(1*d);
-            }
-        }
-        //printf("%f\n",t);
         if(rstate==fountain || rstate == cannon)
         {
-            colour[0] = 0;
-            colour[1] = 1;
-            colour[2] = 0;
+            colour[0] = red;
+            colour[1] = green;
+            colour[2] = blue;
             colour[3] = fade;
         }
         else if(rstate==rain)
@@ -295,135 +240,83 @@ public:
             colour[2] = 0.5;
             colour[3] = fade;
         }
+        
         glPushMatrix();
         glColor4fv(colour);
         glTranslatef(x, y, z);
-        glRotatef(rotation*t, rdirection[0], rdirection[1], rdirection[2]);
-        glutSolidSphere(radius,8,8);
+        glRotatef(rotationAngle, rotationMultipliers[0], rotationMultipliers[1], rotationMultipliers[2]);
+        glutSolidSphere(radius, 16, 16);
         glPopMatrix();
+        
     }
     Particle()
     {
-        radius = .25;
+        previous = current;
+        timeOffset = 0;
+        d = 0;
+        radius = 0.25;
         gravity = -9.8;
-        lifespan = 10;
         mass = (((float)rand()/RAND_MAX)*(15-10))+10;
-        rotation = (((float)rand()/RAND_MAX)*(25-1))+1;
-        rdirection[0] = ((float)rand()/RAND_MAX);
-        rdirection[1] = ((float)rand()/RAND_MAX);
-        rdirection[2] = ((float)rand()/RAND_MAX);
-        yAccel = gravity*mass;
-        tOffset = 0;
-        t2Offset = 0;
-        dOffset = 0;
-
+        gravity = gravity*mass;
+        
+        rotationAngle = (((float)rand()/RAND_MAX)*(25-1))+1;
+        rotationSpeed = (((float)rand()/RAND_MAX)*(5-1))+1;
+        rotationMultipliers[0] = ((float)rand()/RAND_MAX);
+        rotationMultipliers[1] = ((float)rand()/RAND_MAX);
+        rotationMultipliers[2] = ((float)rand()/RAND_MAX);
+        red = ((float)rand()/RAND_MAX);
+        green = ((float)rand()/RAND_MAX);
+        blue = ((float)rand()/RAND_MAX);
+        
         if(rstate == fountain)
         {
-            xi = 0;
-            yi = radius;
-            zi = 0;
-            xo = (((float)rand()/RAND_MAX)*(10))-5;
-            yo = (((float)rand()/RAND_MAX)*(140-120))+120;
-            zo = (((float)rand()/RAND_MAX)*(10))-5;
+            x = 0;
+            y = radius;
+            z = 0;
+            xspeed = (((float)rand()/RAND_MAX)*(5+5))-5;
+            yspeed = (((float)rand()/RAND_MAX)*(140-120)+120);
+            zspeed = (((float)rand()/RAND_MAX)*(5+5))-5;
+            lifespan = 12;
         }
-        if(rstate == rain)
+        else if(rstate == rain)
         {
-            xi = (((float)rand()/RAND_MAX)*(50+50))-50;
-            yi = 120;
-            zi = (((float)rand()/RAND_MAX)*(50+50))-50;
-            xo = (((float)rand()/RAND_MAX)*(10))-5;
-            yo = 0;
-            zo = (((float)rand()/RAND_MAX)*(10))-5;
+            x = (((float)rand()/RAND_MAX)*(50+50))-50;
+            y = 120;
+            z = (((float)rand()/RAND_MAX)*(50+50))-50;
+            xspeed = 0;
+            yspeed = 0;
+            zspeed = 0;
             lifespan = 5;
         }
-        if(rstate == cannon)
+        else if(rstate == cannon)
         {
             float cannonAngle = toRadians(c.getAngle());
-            xi = (c.getX()+(cos(cannonAngle)*c.getLength()))-sin(cannonAngle)*c.getRadius();
-            yi = (c.getY()+(sin(cannonAngle)*c.getLength()))+cos(cannonAngle)*c.getRadius();
-            zi = 0;
-            xo = cos(cannonAngle)*80;
-            yo = sin(cannonAngle)*80;
-            zo = (((float)rand()/RAND_MAX)*(10))-5;
+            x = c.getX()+(c.getLength()*(cos(cannonAngle)))-(c.getRadius()*sin(cannonAngle));
+            y = c.getY()+(c.getLength()*(sin(cannonAngle)))+(c.getRadius()*cos(cannonAngle));
+            z = 0;
+            xspeed = cos(cannonAngle)*80;
+            yspeed = sin(cannonAngle)*80;
+            zspeed = (((float)rand()/RAND_MAX)*(10))-5;
+            lifespan = 12;
         }
         marked = false;
         fade = 1;
-
-        gettimeofday(&spawn, NULL);
-        update = spawn;
-        update2 = spawn;
-        update3 = spawn;
-
+        lived = 0;
     }
+    
 private:
     void checkLifeTime()
     {
-        if( t > lifespan && marked == false)
+        if(lived > lifespan && !marked)
         {
             marked = true;
-            gettimeofday(&death, NULL);
-        }
-        
-    }
-    void applyforces()
-    {
-        if (friction && (rstate == fountain || rstate == cannon))
-            f = 0.75;
-        else if (friction && rstate == rain)
-            f = 0.25;
-        else
-            f = 1;
-
-        gettimeofday(&current, NULL);
-        t = preciseDiff(current, spawn) - tOffset;
-        t2 = preciseDiff(current, update) - t2Offset;
-        t3 = preciseDiff(current, update2) - t3Offset;
-        t4 = preciseDiff(current, update3) - t4Offset;
-        
-        
-        yspeed = yo+(yAccel*t3);
-
-        x = xi+(xo*t2);
-        y = yi+(yo*t3+(((float)1/2)*yAccel*(t3*t3)));
-        z = zi+(zo*t4);
-        
-        
-        if(y<=radius && yspeed < 0 && (x<50 && x>-50) && (z<50 && z>-50))
-        {
-            yo = -yspeed*f;
-            yi = radius;
-            t3Offset = 0;
-            gettimeofday(&update2, NULL);
-
-        }
-        if(y<=(radius+object.getY()+object.getHeight()) && yspeed < 0 &&
-           (x<object.getX()+object.getLength() && x>object.getX()) &&
-           (z<object.getZ()) && (z>object.getZ()-object.getWidth()))
-        {
-            yo = -yspeed*f;
-            yi = radius+object.getY()+object.getHeight();
-            t3Offset = 0;
-            gettimeofday(&update2, NULL);
-
-        }
-        if(z<=(object.getZ()+radius) && zspeed < 0 &&
-           (x<object.getX()+object.getLength() && x>object.getX()) &&
-           (y<object.getY()+object.getHeight() && y>object.getY()))
-        {
-            zo = -zo;
-            zi = object.getZ()+radius;
-            t4Offset = 0;
-            gettimeofday(&update3, NULL);
         }
     }
-    float x, y, z, xi, yi, zi, radius, mass;
-    float gravity, yAccel, f, xspeed, yspeed, zspeed, xo, yo, zo, rotation;
-    float fade, lifespan, tOffset, t2Offset, t3Offset, t4Offset, dOffset;
-    float colour[4];
-    float rdirection[3];
-    double t, t2, t3, t4, d;
+    float x, y, z, radius, mass;
+    float gravity, xspeed, yspeed, zspeed, rotationAngle, rotationMultipliers[3], rotationSpeed;
+    float fade, colour[4], red, green, blue, lifespan, lived, d, f, timeOffset;
+    timeval previous;
     bool marked;
-    struct timeval spawn, update, update2, update3, current, death;
 };
 
 vector<Particle> parts;
@@ -435,33 +328,76 @@ void display()
         gettimeofday(&tfrozen, NULL);
         frozen = true;
     }
-    if(!paused && frozen)
+    else if(!paused && frozen)
     {
         gettimeofday(&thawed, NULL);
         pauseOffset = preciseDiff(thawed, tfrozen);
         for(int x = 0; x<parts.size(); x++)
         {
-            parts[x].setTOffset(pauseOffset);
+            parts[x].setTimeOffset(pauseOffset);
         }
         frozen = false;
     }
-    gettimeofday(&update, NULL);
-
-    pTime = preciseDiff(update, start) - pauseOffset;
-
+    
+    gettimeofday(&current, NULL);
+    
+    pTime = preciseDiff(current, point) - pauseOffset;
+    
     if(pTime > tspacing && !paused)
     {
         parts.push_back(Particle());
-        tspacing += cspacing;
+        gettimeofday(&point, NULL);
     }
-
+    
+    if(!paused)
+    {
+        for(int x = 0; x<parts.size(); x++)
+        {
+            parts[x].applyForces();
+        }
+    }
+    float l = -1;
+    for(int x = 0; x<parts.size(); x++)
+    {
+        
+        if(parts[x].getDeath())
+        {
+            l = x;
+        }
+        else if(l != -1)
+        {
+            if(p<=l)
+                cstate = out;
+            else
+                p-=l;
+            for(int z = 0; z<l; z++)
+            {
+                parts.erase(parts.begin());
+            }
+            break;
+        }
+    }
+    
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glLoadIdentity();
-    gluLookAt(Ex, Ey, Ez, 0, 30, 0, 0, 1, 0);
-
+    
+    if(cstate==out || parts.size()==p)
+    {
+        Ex = Mx*cameraRadius;
+        Ez = Mz*cameraRadius;
+        gluLookAt(Ex, Ey, Ez, 0, 30, 0, 0, 1, 0);
+    }
+    else if(cstate==pfollow)
+    {
+        float px = parts[p].getX();
+        float py = parts[p].getY();
+        float pz = parts[p].getZ();
+        gluLookAt(px+(Mx*5), py+5, pz+(Mz*5), px, py, pz, 0, 1, 0);
+    }
+    
     glPushMatrix();
     glBegin(GL_QUADS);
-    glColor3f(0, 0, 1);
+    glColor3f(0.2, 0.2, 0.2);
     glVertex3f(50, 0, 50);
     glVertex3f(50, 0, -50);
     glVertex3f(-50, 0, -50);
@@ -469,37 +405,21 @@ void display()
     glEnd();
     glPopMatrix();
     
-    object.draw();
-    if(rstate == cannon)
-    {
-        c.draw();
-    }
-    //test.draw();
-    for(int x = 0; x<parts.size(); x++)
-    {
-        if(parts[x].getDeath() == true)
-        {
-            tokill.push_back(x);
-            if(tokill.size() > 1)
-                tokill[tokill.size()-1] -= tokill.size()-1;
-        }
-    }
-    for(int x = 0; x<tokill.size(); x++)
-    {
-        parts.erase(parts.begin()+tokill[x]);
-        if(x == tokill.size()-1)
-        {
-            tokill.clear();
-        }
-    }
-
+    
     for(int x = 0; x<parts.size(); x++)
     {
         parts[x].draw();
     }
+    if(rstate == cannon)
+    {
+        c.draw();
+    }
+
+    pauseOffset = 0;
     
     glFlush();
     glutSwapBuffers();
+    gettimeofday(&instant, NULL);
     glutPostRedisplay();
 
 }
@@ -536,6 +456,15 @@ void keyboard(unsigned char key, int x, int y)
     {
         friction = !friction;
     }
+    else if(key == 'w')
+    {
+        cstate = pfollow;
+        p = parts.size();
+    }
+    else if(key == 'e')
+    {
+        cstate = out;
+    }
     else if(key == 'r')
     {
         parts.clear();
@@ -552,15 +481,15 @@ void special(int key, int x, int y)
 {
     if(key == GLUT_KEY_RIGHT)
     {
-        rotation++;
-        Ez = (cos(toRadians(10*rotation)))*camerahRadius;
-        Ex = (sin(toRadians(10*rotation)))*camerahRadius;
+        cameraRotation++;
+        Mz = (cos(toRadians(10*cameraRotation)));
+        Mx = (sin(toRadians(10*cameraRotation)));
     }
     else if(key == GLUT_KEY_LEFT)
     {
-        rotation--;
-        Ez = (cos(toRadians(10*rotation)))*camerahRadius;
-        Ex = (sin(toRadians(10*rotation)))*camerahRadius;
+        cameraRotation--;
+        Mz = (cos(toRadians(10*cameraRotation)));
+        Mx = (sin(toRadians(10*cameraRotation)));
     }
     else if(key == GLUT_KEY_UP && rstate == cannon && !paused)
     {
@@ -598,9 +527,10 @@ int main(int argc, char *argv[])
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    gluLookAt(Ex, Ey, Ez, 0, 30, 0, 0, 1, 0);
 
-    gettimeofday(&start, NULL);
+    gettimeofday(&current, NULL);
+    gettimeofday(&point, NULL);
+    gettimeofday(&instant, NULL);
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
     glutSpecialFunc(special);
